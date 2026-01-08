@@ -10,6 +10,12 @@ variable "bucket_name" {
 }
 
 
+variable "openweather_api_key" {
+  type        = string
+  sensitive   = true # Mark as sensitive in UI/logs
+}
+
+
 terraform {
   required_providers {
     aws = {
@@ -75,6 +81,7 @@ resource "null_resource" "build_first_image_tag" {
 
 resource "aws_iam_role" "apprunner_ecr_access" {
   name = "AppRunnerECRAccessRole"
+  path = "/service-role/"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -141,39 +148,52 @@ resource "aws_iam_role_policy_attachment" "apprunner_instance_role" {
 }
 
 
-#resource "aws_apprunner_service" "app" {
-#  service_name = "weather-api"
-#
-#  source_configuration {
-#    image_repository {
-#      image_configuration {
-#        port = "8000" # FastAPI default port
-#      }
-#      image_identifier      = "${aws_ecr_repository.repo.repository_url}:latest"
-#      image_repository_type = "ECR"
-#    }
-#    auto_deployments_enabled = false
-#  }
-#
-#  instance_configuration {
-#    instance_role_arn = aws_iam_role.apprunner_instance_role.arn
-#  }
-#
-##  authentication_configuration {
-##    access_role_arn = aws_iam_role.apprunner_service_role.arn
-##  }
-#
-#  depends_on = [
-#    null_resource.build_first_image_tag,
-#    aws_iam_role_policy_attachment.apprunner_ecr_access,
-#    aws_iam_role_policy_attachment.apprunner_instance_role
-#  ]
-#}
+resource "aws_secretsmanager_secret" "openweather_api_key" {
+  name = "OpenWeather_API_Key"
+}
 
 
+resource "aws_secretsmanager_secret_version" "openweather_api_key" {
+  secret_id     = aws_secretsmanager_secret.openweather_api_key.id
+  secret_string = "{\"OPENWEATHER_API_KEY\":\"${var.openweather_api_key}\"}"
+}
 
 
-# app runner should be depends on aws_iam_role_policy_attachment.apprunner_instance_role
+resource "aws_apprunner_service" "app" {
+  service_name = "weather-api"
+
+  source_configuration {
+    authentication_configuration {
+      access_role_arn = aws_iam_role.apprunner_ecr_access.arn
+    }
+    image_repository {
+      image_configuration {
+        port = "8000" # FastAPI default port
+        runtime_environment_secrets = {
+          OPENWEATHER_API_KEY = aws_secretsmanager_secret.openweather_api_key.arn
+        }
+        runtime_environment_variables = {
+          DYNAMODB_TABLE_NAME = aws_dynamodb_table.table.name
+          S3_BUCKET_NAME      = aws_s3_bucket.bucket.id
+        }
+      }
+      image_identifier      = "${aws_ecr_repository.repo.repository_url}:latest"
+      image_repository_type = "ECR"
+    }
+
+    auto_deployments_enabled = false
+  }
+
+  instance_configuration {
+    instance_role_arn = aws_iam_role.apprunner_instance_role.arn
+  }
+
+  depends_on = [
+    null_resource.build_first_image_tag,
+    aws_iam_role_policy_attachment.apprunner_ecr_access,
+    aws_iam_role_policy_attachment.apprunner_instance_role
+  ]
+}
 
 
 output "aws_region" {
@@ -186,6 +206,6 @@ output "ecr_repository_uri" {
 }
 
 
-#output "app_url" {
-#  value = aws_apprunner_service.app.service_url
-#}
+output "app_url" {
+  value = aws_apprunner_service.app.service_url
+}
