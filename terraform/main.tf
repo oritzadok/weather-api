@@ -155,7 +155,7 @@ resource "aws_secretsmanager_secret" "openweather_api_key" {
 
 resource "aws_secretsmanager_secret_version" "openweather_api_key" {
   secret_id     = aws_secretsmanager_secret.openweather_api_key.id
-  secret_string = "{\"OPENWEATHER_API_KEY\":\"${var.openweather_api_key}\"}"
+  secret_string = var.openweather_api_key
 }
 
 
