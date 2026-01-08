@@ -21,13 +21,12 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
 
-
 settings = Settings()
 
 
 # --- Global HTTP Client Management ---
 # We use a lifespan context manager to reuse a single HTTP client
-# rather than opening a new connection for every request.
+# rather than opening a new connection for every request
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient()
@@ -41,7 +40,7 @@ app = FastAPI(lifespan=lifespan)
 # --- Helper Services ---
 
 async def fetch_weather(city: str, client: httpx.AsyncClient) -> Dict[str, Any]:
-    """Asynchronously fetches weather data from external API."""
+    """Asynchronously fetches weather data from external API"""
     params = {
         "q": city,
         "appid": settings.OPENWEATHER_API_KEY,
@@ -57,7 +56,7 @@ async def fetch_weather(city: str, client: httpx.AsyncClient) -> Dict[str, Any]:
 
 
 async def upload_to_s3(session: aioboto3.Session, data: dict, filename: str) -> str:
-    """Uploads JSON to S3 and returns the S3 URL."""
+    """Uploads JSON to S3 and returns the S3 URI"""
     try:
         json_bytes = json.dumps(data).encode('utf-8')
         
@@ -75,13 +74,13 @@ async def upload_to_s3(session: aioboto3.Session, data: dict, filename: str) -> 
         raise HTTPException(status_code=500, detail="Failed to upload weather data")
 
 
-async def log_to_dynamodb(session: aioboto3.Session, city: str, timestamp: int, s3_url: str):
-    """Logs the event metadata to DynamoDB."""
+async def log_to_dynamodb(session: aioboto3.Session, city: str, timestamp: int, s3_uri: str):
+    """Logs the event metadata to DynamoDB"""
     try:
         item = {
-            "city": city,                 # Partition Key
-            "timestamp": timestamp,       # Sort Key (optional, but recommended)
-            "s3_url": s3_url,
+            "city": city,
+            "timestamp": timestamp,
+            "s3_uri": s3_uri,
             "processed_at": str(time.time())
         }
         
@@ -92,13 +91,13 @@ async def log_to_dynamodb(session: aioboto3.Session, city: str, timestamp: int, 
     except ClientError as e:
         print(f"DynamoDB Error: {e}")
         # We might not want to fail the user request if logging fails, 
-        # but for this example, we will raise an error.
+        # but for this example, we will raise an error
         raise HTTPException(status_code=500, detail="Failed to log transaction")
 
 
 # --- The Endpoint ---
 
-@app.get("/weather")
+@app.get("/weather/")
 async def get_weather(city: str = Query(..., min_length=1)):
     timestamp = int(time.time())
     filename = f"{city}_{timestamp}.json"
@@ -110,15 +109,14 @@ async def get_weather(city: str = Query(..., min_length=1)):
     session = aioboto3.Session()
     
     # 2. Upload to S3
-    s3_url = await upload_to_s3(session, weather_data, filename)
+    s3_uri = await upload_to_s3(session, weather_data, filename)
     
     # 3. Log to DynamoDB
-    # Note: If high performance is critical, you could fire this as a background task
-    # using BackgroundTasks so the user gets a response faster.
-    await log_to_dynamodb(session, city, timestamp, s3_url)
+    # Note: If high performance is critical, can fire this as a background task
+    # using BackgroundTasks so the user gets a response faster
+    await log_to_dynamodb(session, city, timestamp, s3_uri)
     
     return {
         "city": city,
-        "temperature": weather_data.get("main", {}).get("temp"),
-        "status": "success"
+        "temperature": weather_data["main"]["temp"]
     }
