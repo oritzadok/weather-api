@@ -12,7 +12,6 @@ from botocore.exceptions import ClientError
 
 # --- Configuration Management ---
 class Settings(BaseSettings):
-    AWS_REGION: str = "us-east-1"
     S3_BUCKET_NAME: str
     DYNAMODB_TABLE_NAME: str
     OPENWEATHER_API_KEY: str
@@ -60,7 +59,7 @@ async def upload_to_s3(session: aioboto3.Session, data: dict, filename: str) -> 
     try:
         json_bytes = json.dumps(data).encode('utf-8')
         
-        async with session.client("s3", region_name=settings.AWS_REGION) as s3:
+        async with session.client("s3") as s3:
             await s3.put_object(
                 Bucket=settings.S3_BUCKET_NAME,
                 Key=filename,
@@ -84,7 +83,7 @@ async def log_to_dynamodb(session: aioboto3.Session, city: str, timestamp: int, 
             "processed_at": str(time.time())
         }
         
-        async with session.resource("dynamodb", region_name=settings.AWS_REGION) as dynamo_resource:
+        async with session.resource("dynamodb") as dynamo_resource:
             table = await dynamo_resource.Table(settings.DYNAMODB_TABLE_NAME)
             await table.put_item(Item=item)
             
