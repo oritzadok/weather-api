@@ -207,5 +207,5 @@ output "ecr_repository_uri" {
 
 
 output "app_url" {
-  value = aws_apprunner_service.app.service_url
+  value = "https://${aws_apprunner_service.app.service_url}"
 }
