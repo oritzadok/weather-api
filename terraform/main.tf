@@ -131,6 +131,8 @@ resource "aws_iam_policy" "apprunner_instance_role_policy" {
       {
         Action = [
           "secretsmanager:GetSecretValue",
+          "s3:ListBucket",
+          "s3:GetObject",
           "s3:PutObject",
           "dynamodb:PutItem"
         ]

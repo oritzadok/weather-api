@@ -10,7 +10,7 @@ import aioboto3
 from botocore.exceptions import ClientError
 
 
-# --- Configuration Management ---
+# Configuration Management
 class Settings(BaseSettings):
     S3_BUCKET_NAME: str
     DYNAMODB_TABLE_NAME: str
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-# --- Global HTTP Client Management ---
+# Global HTTP Client Management
 # We use a lifespan context manager to reuse a single HTTP client
 # rather than opening a new connection for every request
 @asynccontextmanager
@@ -35,8 +35,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-
-# --- Helper Services ---
 
 async def fetch_weather(city: str, client: httpx.AsyncClient) -> Dict[str, Any]:
     """Asynchronously fetches weather data from external API"""
@@ -52,6 +50,63 @@ async def fetch_weather(city: str, client: httpx.AsyncClient) -> Dict[str, Any]:
         raise HTTPException(status_code=response.status_code, detail="Weather service unavailable or city not found")
     
     return response.json()
+
+
+CACHE_TTL_SECONDS = 300
+
+# list_objects_v2 is O(N). S3 LIST calls cost money, DynamoDB-based cache index is cheaper at scale.
+# Better long-term solution:
+# - Store latest cache pointer in DynamoDB.
+# - Or use a fixed key: cache/{city}.json + metadata.
+# Can also add Cache-Control metadata on S3 objects, or use S3 Object Tags (cached_at)
+async def get_cached_weather(
+    session: aioboto3.Session,
+    city: str,
+    now_ts: int
+) -> Dict[str, Any] | None:
+    """
+    Returns cached weather data if exists and not expired, otherwise None
+    """
+    try:
+        prefix = f"{city}_"
+
+        async with session.client("s3") as s3:
+            response = await s3.list_objects_v2(
+                Bucket=settings.S3_BUCKET_NAME,
+                Prefix=prefix
+            )
+
+            if "Contents" not in response:
+                return None
+
+            latest_obj = None
+            latest_ts = 0
+
+            for obj in response["Contents"]:
+                key = obj["Key"]
+                try:
+                    ts = int(key.replace(prefix, "").replace(".json", ""))
+                    if ts > latest_ts:
+                        latest_ts = ts
+                        latest_obj = key
+                except ValueError:
+                    continue
+
+            if not latest_obj:
+                return None
+
+            if now_ts - latest_ts > CACHE_TTL_SECONDS:
+                return None
+
+            cached_obj = await s3.get_object(
+                Bucket=settings.S3_BUCKET_NAME,
+                Key=latest_obj
+            )
+            body = await cached_obj["Body"].read()
+            return json.loads(body)
+    except ClientError as e:
+        print(f"S3 Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get cached weather data")
 
 
 async def upload_to_s3(session: aioboto3.Session, data: dict, filename: str) -> str:
@@ -94,28 +149,31 @@ async def log_to_dynamodb(session: aioboto3.Session, city: str, timestamp: int, 
         raise HTTPException(status_code=500, detail="Failed to log transaction")
 
 
-# --- The Endpoint ---
-
 @app.get("/weather/")
 async def get_weather(city: str = Query(..., min_length=1)):
     timestamp = int(time.time())
-    filename = f"{city}_{timestamp}.json"
+
+    session = aioboto3.Session()
+
+    cached_weather = await get_cached_weather(session, city, timestamp)
+    if cached_weather:
+        return {
+            "city": city,
+            "temperature": cached_weather["main"]["temp"],
+            "source": "cache"
+        }
     
-    # 1. Fetch Weather (Non-blocking I/O)
     weather_data = await fetch_weather(city, app.state.http_client)
     
-    # Initialize AWS Session
-    session = aioboto3.Session()
-    
-    # 2. Upload to S3
+    filename = f"{city}_{timestamp}.json"
     s3_uri = await upload_to_s3(session, weather_data, filename)
     
-    # 3. Log to DynamoDB
     # Note: If high performance is critical, can fire this as a background task
     # using BackgroundTasks so the user gets a response faster
     await log_to_dynamodb(session, city, timestamp, s3_uri)
     
     return {
         "city": city,
-        "temperature": weather_data["main"]["temp"]
+        "temperature": weather_data["main"]["temp"],
+        "source": "api"
     }
