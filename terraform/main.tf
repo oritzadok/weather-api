@@ -129,6 +129,7 @@ resource "aws_iam_policy" "apprunner_instance_role_policy" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Should be more specific
         Action = [
           "secretsmanager:GetSecretValue",
           "s3:ListBucket",
@@ -210,4 +211,5 @@ output "ecr_repository_uri" {
 
 output "app_url" {
   value = "https://${aws_apprunner_service.app.service_url}"
+
 }
